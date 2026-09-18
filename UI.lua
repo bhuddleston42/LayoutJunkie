@@ -81,18 +81,18 @@ StaticPopupDialogs["LAYOUTJUNKIE_IMPORT_NAME"] = {
     whileDead = true,
     hideOnEscape = true,
     OnAccept = function(self)
-        local name = self.editBox:GetText():trim()
+        local name = self:GetEditBox():GetText():trim()
         if name == "" then name = "Unnamed Layout" end
         ns._pendingImportName = name
-        StaticPopup_Show("LAYOUTJUNKIE_IMPORT_STRING")
+        StaticPopup_Show("LAYOUTJUNKIE_IMPORT_STRING", name)
     end,
     EditBoxOnEnterPressed = function(self)
         local parent = self:GetParent()
-        local name = parent.editBox:GetText():trim()
+        local name = parent:GetEditBox():GetText():trim()
         if name == "" then name = "Unnamed Layout" end
         ns._pendingImportName = name
         parent:Hide()
-        StaticPopup_Show("LAYOUTJUNKIE_IMPORT_STRING")
+        StaticPopup_Show("LAYOUTJUNKIE_IMPORT_STRING", name)
     end,
     EditBoxOnEscapePressed = function(self)
         self:GetParent():Hide()
@@ -109,10 +109,11 @@ StaticPopupDialogs["LAYOUTJUNKIE_IMPORT_STRING"] = {
     hideOnEscape = true,
     editBoxWidth = 350,
     OnShow = function(self)
-        self.text:SetFormattedText("Paste the Edit Mode import string for '%s':", ns._pendingImportName or "layout")
+        self:GetEditBox():SetMaxLetters(0)
+        self:GetEditBox():SetFocus()
     end,
     OnAccept = function(self)
-        local str = self.editBox:GetText():trim()
+        local str = self:GetEditBox():GetText():trim()
         local name = ns._pendingImportName or "Unnamed Layout"
         ns._pendingImportName = nil
         ns.AddLayoutFromString(name, str)
@@ -122,7 +123,7 @@ StaticPopupDialogs["LAYOUTJUNKIE_IMPORT_STRING"] = {
     end,
     EditBoxOnEnterPressed = function(self)
         local parent = self:GetParent()
-        local str = parent.editBox:GetText():trim()
+        local str = parent:GetEditBox():GetText():trim()
         local name = ns._pendingImportName or "Unnamed Layout"
         ns._pendingImportName = nil
         parent:Hide()
@@ -141,7 +142,7 @@ end
 -- Claim slot dialog: user picks which Edit Mode slot LJ takes over
 -- ---------------------------------------------------------------------------
 function ns.ShowReplaceSlotDialog(pendingApplyIdx)
-    local editModeLayouts = C_EditMode.GetLayouts()
+    local editModeLayouts = ns.GetGameLayouts()
     if type(editModeLayouts) ~= "table" or type(editModeLayouts.layouts) ~= "table"
        or #editModeLayouts.layouts < 1 then
         print("|cffFF4444LayoutJunkie:|r No Edit Mode layouts found.")
@@ -156,12 +157,20 @@ function ns.ShowReplaceSlotDialog(pendingApplyIdx)
 
         for i, l in ipairs(editModeLayouts.layouts) do
             local slotIdx = i
+            local ok, expectedSlot = pcall(C_EditMode.ConvertLayoutInfoToString, l)
+            local pendingEntry = ns.db.layouts[pendingApplyIdx]
             local name = l.layoutName or ("Custom Layout " .. i)
             local typeTag = (l.layoutType == Enum.EditModeLayoutType.Character)
                 and "|cffFFD100[Character]|r"
                 or "|cff69CCF0[Account]|r"
             root:CreateButton(typeTag .. " " .. name, function()
-                ns.ReplaceSlot(slotIdx, pendingApplyIdx)
+                if not ok or not expectedSlot then return end
+                for idx, entry in ipairs(ns.db.layouts) do
+                    if entry == pendingEntry then
+                        ns.ReplaceSlot(slotIdx, idx, expectedSlot)
+                        break
+                    end
+                end
             end)
         end
 
@@ -178,11 +187,11 @@ if AddonCompartmentFrame and AddonCompartmentFrame.RegisterAddon then
         text = "LayoutJunkie",
         icon = "Interface\\Icons\\INV_Misc_Gear_01",
         notCheckable = true,
-        func = function(button, _, _, _, mouseButton)
-            if mouseButton == "RightButton" then
-                ns.ShowConfigMenu(button)
+        func = function(_, menuInputData)
+            if menuInputData and menuInputData.buttonName == "RightButton" then
+                ns.ShowConfigMenu(AddonCompartmentFrame)
             else
-                ns.ShowLayoutMenu(button)
+                ns.ShowLayoutMenu(AddonCompartmentFrame)
             end
         end,
         funcOnEnter = function(button)

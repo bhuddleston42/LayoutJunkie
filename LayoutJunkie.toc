@@ -1,8 +1,8 @@
-## Interface: 120001
+## Interface: 120100
 ## Title: LayoutJunkie
 ## Notes: Infinite Edit Mode Slots for the UI Degenerate
 ## Author: Baraius
-## Version: 1.0.1
+## Version: 1.1.0
 ## SavedVariables: LayoutJunkieDB
 ## IconTexture: Interface\Icons\INV_Misc_Gear_01
 ## Category-enUS: User Interface

@@ -31,9 +31,11 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 
     elseif event == "PLAYER_REGEN_ENABLED" then
         if ns.pendingLayout then
-            local idx = ns.pendingLayout
+            local entry = ns.pendingLayout
             ns.pendingLayout = nil
-            ns.ApplyLayout(idx)
+            for idx, saved in ipairs(ns.db.layouts) do
+                if saved == entry then ns.ApplyLayout(idx); break end
+            end
         end
     end
 end)
@@ -64,7 +66,8 @@ ns.dataObj = LDB:NewDataObject(addon, {
 
         -- Show active in-game layout
         local ok, layoutData = pcall(C_EditMode.GetLayouts)
-        if ok and layoutData then
+        if ok and type(layoutData) == "table" and type(layoutData.activeLayout) == "number"
+            and type(layoutData.layouts) == "table" then
             local activeName = "Unknown"
             local activeIdx = layoutData.activeLayout
             if activeIdx <= 2 then
@@ -91,29 +94,94 @@ ns.dataObj = LDB:NewDataObject(addon, {
 -- ---------------------------------------------------------------------------
 local PRESET_OFFSET = 2 -- Modern + Classic presets
 
+function ns.GetGameLayouts()
+    local ok, data = pcall(C_EditMode.GetLayouts)
+    if ok and type(data) == "table" and type(data.layouts) == "table" then return data end
+    print("|cffFF4444LayoutJunkie:|r Could not read Edit Mode layouts.")
+end
+
+local function SaveLayouts(data)
+    local ok, err = pcall(C_EditMode.SaveLayouts, data)
+    if not ok then print("|cffFF4444LayoutJunkie:|r Save failed: " .. tostring(err)) end
+    return ok
+end
+
+local function ActivateSlot(index, name)
+    local ok, err = pcall(C_EditMode.SetActiveLayout, index + PRESET_OFFSET)
+    local data = ok and ns.GetGameLayouts()
+    if not ok or not data or data.activeLayout ~= index + PRESET_OFFSET then
+        print("|cffFF4444LayoutJunkie:|r Could not activate layout '" .. name .. "'." .. (not ok and (" " .. tostring(err)) or ""))
+        return false
+    end
+    print("|cff00FF00LayoutJunkie:|r Applied layout '" .. name .. "'.")
+    return true
+end
+
+local function CanApply(entry)
+    if InCombatLockdown() then
+        -- Keep the entry itself: deleting another layout must not change the queued target.
+        ns.pendingLayout = entry
+        print("|cffFFD100LayoutJunkie:|r In combat -- layout will apply when combat ends.")
+        return false
+    end
+    if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
+        print("|cffFFD100LayoutJunkie:|r Close Edit Mode before switching layouts.")
+        return false
+    end
+    return true
+end
+
+-- Save by content, not just name. A namesake in the library is not a backup.
+local function BackupSlot(layout, slotIdx)
+    local ok, exportStr = pcall(C_EditMode.ConvertLayoutInfoToString, layout)
+    if not ok or type(exportStr) ~= "string" or exportStr == "" then
+        print("|cffFF4444LayoutJunkie:|r Could not back up the existing layout; replacement cancelled.")
+        return false
+    end
+    local names = {}
+    for _, saved in ipairs(ns.db.layouts) do
+        if saved.importString == exportStr then return true end
+        names[saved.name:lower()] = true
+    end
+    local base = layout.layoutName or ("Custom Layout " .. slotIdx)
+    local name, suffix = base, 1
+    while names[name:lower()] do
+        name = base .. " (backup " .. suffix .. ")"
+        suffix = suffix + 1
+    end
+    table.insert(ns.db.layouts, { name = name, importString = exportStr })
+    print("|cff00FF00LayoutJunkie:|r Auto-saved '" .. name .. "' before replacing.")
+    return true
+end
+
 -- Try to append a new slot. Returns slot index if it fit, nil if at cap.
 local function tryAppendSlot(imported, name, layoutType)
-    local editModeLayouts = C_EditMode.GetLayouts()
+    local editModeLayouts = ns.GetGameLayouts()
+    if not editModeLayouts then return nil, true end
     local countBefore = #editModeLayouts.layouts
 
     imported.layoutName = name
     imported.layoutType = layoutType
     table.insert(editModeLayouts.layouts, imported)
 
-    pcall(C_EditMode.SaveLayouts, editModeLayouts)
+    if not SaveLayouts(editModeLayouts) then return nil, true end
 
     -- SaveLayouts silently drops at cap -- verify by count
-    local verify = C_EditMode.GetLayouts()
+    local verify = ns.GetGameLayouts()
+    if not verify then return nil, true end
     if #verify.layouts > countBefore then
-        return #verify.layouts
+        for i, layout in ipairs(verify.layouts) do
+            if layout.layoutName == name and layout.layoutType == layoutType then return i end
+        end
     end
     return nil
 end
 
 -- Replace a specific slot's contents (used by claim dialog)
-function ns.ReplaceSlot(slotIdx, pendingApplyIdx)
+function ns.ReplaceSlot(slotIdx, pendingApplyIdx, expectedSlot)
     local entry = ns.db.layouts[pendingApplyIdx]
     if not entry then return end
+    if not CanApply(entry) then return end
 
     local ok, imported = pcall(C_EditMode.ConvertStringToLayoutInfo, entry.importString)
     if not ok or type(imported) ~= "table" then
@@ -121,51 +189,36 @@ function ns.ReplaceSlot(slotIdx, pendingApplyIdx)
         return
     end
 
-    local editModeLayouts = C_EditMode.GetLayouts()
+    local editModeLayouts = ns.GetGameLayouts()
+    if not editModeLayouts then return end
     local oldSlot = editModeLayouts.layouts[slotIdx]
     if not oldSlot then return end
 
-    -- Auto-save the slot's existing layout before overwriting
-    local exportStr = C_EditMode.ConvertLayoutInfoToString(oldSlot)
-    if exportStr then
-        local origName = oldSlot.layoutName or ("Custom Layout " .. slotIdx)
-        local existingNames = {}
-        for _, e in ipairs(ns.db.layouts) do
-            existingNames[e.name:lower()] = true
-        end
-        if not existingNames[origName:lower()] then
-            table.insert(ns.db.layouts, {
-                name = origName,
-                importString = exportStr,
-            })
-            print("|cff00FF00LayoutJunkie:|r Auto-saved '" .. origName .. "' before replacing.")
-        end
+    -- A menu can remain open while another addon changes the slots.
+    local exported, currentSlot = pcall(C_EditMode.ConvertLayoutInfoToString, oldSlot)
+    if expectedSlot and (not exported or currentSlot ~= expectedSlot) then
+        print("|cffFFD100LayoutJunkie:|r Edit Mode layouts changed; choose a slot again.")
+        ns.ShowReplaceSlotDialog(pendingApplyIdx)
+        return
     end
+
+    -- Auto-save the slot's existing layout before overwriting
+    if not BackupSlot(oldSlot, slotIdx) then return end
 
     -- Overwrite with the new layout, keeping the slot's existing type
     imported.layoutName = entry.name
     imported.layoutType = oldSlot.layoutType or Enum.EditModeLayoutType.Account
     editModeLayouts.layouts[slotIdx] = imported
 
-    local ok2, err2 = pcall(C_EditMode.SaveLayouts, editModeLayouts)
-    if not ok2 then
-        print("|cffFF4444LayoutJunkie:|r Save failed: " .. tostring(err2))
-        return
-    end
-
-    pcall(C_EditMode.SetActiveLayout, slotIdx + PRESET_OFFSET)
-    print("|cff00FF00LayoutJunkie:|r Applied layout '" .. entry.name .. "'.")
+    if not SaveLayouts(editModeLayouts) then return end
+    ActivateSlot(slotIdx, entry.name)
 end
 
 function ns.ApplyLayout(index)
     local entry = ns.db.layouts[index]
     if not entry then return end
 
-    if InCombatLockdown() then
-        ns.pendingLayout = index
-        print("|cffFFD100LayoutJunkie:|r In combat -- layout will apply when combat ends.")
-        return
-    end
+    if not CanApply(entry) then return end
 
     local ok, imported = pcall(C_EditMode.ConvertStringToLayoutInfo, entry.importString)
     if not ok or type(imported) ~= "table" then
@@ -174,29 +227,31 @@ function ns.ApplyLayout(index)
     end
 
     -- If a slot with this name already exists, just activate it (avoid duplicates)
-    local editModeLayouts = C_EditMode.GetLayouts()
+    local editModeLayouts = ns.GetGameLayouts()
+    if not editModeLayouts then return end
     for i, l in ipairs(editModeLayouts.layouts) do
         if type(l) == "table" and l.layoutName == entry.name then
             -- Overwrite data so it matches our stored version, then activate
             imported.layoutName = entry.name
             imported.layoutType = l.layoutType or Enum.EditModeLayoutType.Account
             editModeLayouts.layouts[i] = imported
-            pcall(C_EditMode.SaveLayouts, editModeLayouts)
-            pcall(C_EditMode.SetActiveLayout, i + PRESET_OFFSET)
-            print("|cff00FF00LayoutJunkie:|r Applied layout '" .. entry.name .. "'.")
+            if not BackupSlot(l, i) then return end
+            if not SaveLayouts(editModeLayouts) then return end
+            ActivateSlot(i, entry.name)
             return
         end
     end
 
     -- Try an open Account slot first, then Character
-    local newIdx = tryAppendSlot(imported, entry.name, Enum.EditModeLayoutType.Account)
+    local newIdx, failed = tryAppendSlot(imported, entry.name, Enum.EditModeLayoutType.Account)
+    if failed then return end
     if not newIdx then
-        newIdx = tryAppendSlot(imported, entry.name, Enum.EditModeLayoutType.Character)
+        newIdx, failed = tryAppendSlot(imported, entry.name, Enum.EditModeLayoutType.Character)
+        if failed then return end
     end
 
     if newIdx then
-        pcall(C_EditMode.SetActiveLayout, newIdx + PRESET_OFFSET)
-        print("|cff00FF00LayoutJunkie:|r Applied layout '" .. entry.name .. "'.")
+        ActivateSlot(newIdx, entry.name)
         return
     end
 
@@ -205,11 +260,8 @@ function ns.ApplyLayout(index)
 end
 
 function ns.ImportFromGame()
-    local ok, layoutData = pcall(C_EditMode.GetLayouts)
-    if not ok or not layoutData then
-        print("|cffFF4444LayoutJunkie:|r Could not read Edit Mode layouts.")
-        return
-    end
+    local layoutData = ns.GetGameLayouts()
+    if not layoutData then return end
 
     -- Build a set of existing names to skip duplicates
     local existingNames = {}
@@ -221,8 +273,8 @@ function ns.ImportFromGame()
     for i, layout in ipairs(layoutData.layouts) do
         local name = layout.layoutName or ("Custom Layout " .. i)
         if not existingNames[name:lower()] then
-            local exportStr = C_EditMode.ConvertLayoutInfoToString(layout)
-            if exportStr then
+            local ok, exportStr = pcall(C_EditMode.ConvertLayoutInfoToString, layout)
+            if ok and type(exportStr) == "string" and exportStr ~= "" then
                 table.insert(ns.db.layouts, {
                     name = name,
                     importString = exportStr,
@@ -241,8 +293,10 @@ function ns.ImportFromGame()
 end
 
 function ns.AddLayoutFromString(name, importStr)
-    local layoutInfo = C_EditMode.ConvertStringToLayoutInfo(importStr)
-    if not layoutInfo then
+    name = type(name) == "string" and name:match("^%s*(.-)%s*$") or ""
+    if name == "" then name = "Unnamed Layout" end
+    local ok, layoutInfo = pcall(C_EditMode.ConvertStringToLayoutInfo, importStr)
+    if not ok or type(layoutInfo) ~= "table" then
         print("|cffFF4444LayoutJunkie:|r Invalid import string.")
         return false
     end
@@ -258,6 +312,7 @@ end
 function ns.DeleteLayout(index)
     local entry = ns.db.layouts[index]
     if entry then
+        if ns.pendingLayout == entry then ns.pendingLayout = nil end
         local name = entry.name
         table.remove(ns.db.layouts, index)
         print("|cff00FF00LayoutJunkie:|r Deleted layout '" .. name .. "'.")
@@ -265,6 +320,7 @@ function ns.DeleteLayout(index)
 end
 
 function ns.ClearAllLayouts()
+    ns.pendingLayout = nil
     local count = #ns.db.layouts
     wipe(ns.db.layouts)
     print("|cff00FF00LayoutJunkie:|r Cleared " .. count .. " saved layout(s).")
