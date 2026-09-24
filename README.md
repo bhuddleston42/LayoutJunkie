@@ -10,7 +10,7 @@ Commands: `/lj import`, `/lj game`, `/lj list`, `/lj apply #`, `/lj clear`, and 
 
 Download the addon ZIP from GitHub Releases and extract the LayoutJunkie folder into `World of Warcraft/_retail_/Interface/AddOns`. Fully restart the game after a first installation. Existing saved variables are retained.
 
-GitHub Actions runs Lua 5.1 parsing, regression checks, and TOC validation on pushes and pull requests. Push a tag matching the TOC version (for example `v1.1.0`) to publish a BigWigs-packaged addon ZIP and `release.json` for addon managers such as WoWUp. Manual workflow runs build an artifact without publishing. Packaging needs only the repository's automatic GITHUB_TOKEN with contents-write permission; no third-party service credentials are required.
+GitHub Actions runs Lua 5.1 parsing, regression checks, and TOC validation on pushes and pull requests. Push a tag matching the TOC version (for example `v1.1.0`) to publish a BigWigs-packaged addon ZIP and `release.json` for addon managers such as WoWUp. Manual workflow runs build an artifact without publishing. Tagged releases publish to GitHub and CurseForge. GitHub uses the automatic GITHUB_TOKEN with contents-write permission. CurseForge requires an author upload token stored as the repository Actions secret CF_API_KEY; the project ID is in the TOC. Tagged publishing fails clearly if the secret is missing; preview builds need no upload credentials.
 
 ## Validation
 

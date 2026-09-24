@@ -1,3 +1,7 @@
+# 1.1.1
+
+Connect CurseForge project 1526333 to automated tagged releases. Add CurseForge project metadata for addon managers. No gameplay changes.
+
 # 1.1.0
 
 Stores Edit Mode layout exports beyond the built-in slot limit, then imports them into an available account or character slot. If every slot is full, you choose which existing layout to replace.
