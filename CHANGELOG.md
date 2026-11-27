@@ -1,3 +1,7 @@
+# 1.1.2
+
+Update Retail compatibility metadata for Midnight 12.1.5 (interface 120105).
+
 # 1.1.1
 
 Connect CurseForge project 1526333 to automated tagged releases. Add CurseForge project metadata for addon managers. No gameplay changes.
